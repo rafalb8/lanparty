@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/songgao/water"
+	"github.com/spf13/pflag"
 	"github.com/tailscale/tailcat"
 	"github.com/vishvananda/netlink"
 )
@@ -55,6 +56,11 @@ func server(tap *water.Interface) {
 	hub := &Hub{tap: tap}
 	go hub.TapLoop()
 
+	logf := func(format string, args ...any) {}
+	if Verbose {
+		logf = log.Printf
+	}
+
 	srv := &tailcat.Server{
 		OnTCP: func(port uint16) func(net.Conn) {
 			if port != MagicPort {
@@ -62,7 +68,7 @@ func server(tap *water.Interface) {
 			}
 			return hub.Add
 		},
-		// Logf: func(format string, args ...any) {},
+		Logf: logf,
 	}
 
 	err := srv.Start()
@@ -77,6 +83,11 @@ func client(token tailcat.Addr, tap *water.Interface) {
 	fmt.Println("[*] Connecting to server...")
 
 	cli := tailcat.NewClient(token)
+	cli.Logf = func(format string, args ...any) {}
+	if Verbose {
+		cli.Logf = log.Printf
+	}
+
 	c, err := cli.DialTCPPort(context.Background(), MagicPort)
 	if err != nil {
 		log.Fatalf("[!] Failed to connect: %v", err)
@@ -89,13 +100,14 @@ func client(token tailcat.Addr, tap *water.Interface) {
 }
 
 func main() {
-	if len(os.Args) > 2 {
-		fmt.Printf("Usage: %s [token]\n", os.Args[0])
+	args := pflag.Args()
+	if len(args) > 1 {
+		pflag.Usage()
 		os.Exit(1)
 	}
 
 	id := 1
-	serverMode := len(os.Args) == 1
+	serverMode := len(args) == 0
 	if !serverMode {
 		rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 		id = rng.Intn(253) + 2
@@ -108,12 +120,12 @@ func main() {
 	if serverMode {
 		server(tap)
 	} else {
-		token := tailcat.Addr(os.Args[1])
+		token := tailcat.Addr(args[0])
 		client(token, tap)
 	}
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 	<-sig
-	fmt.Println("[*] Shutting down...")
+	fmt.Println("[-] Shutting down...")
 }

@@ -4,6 +4,7 @@ go 1.27.1
 
 require (
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
+	github.com/spf13/pflag v1.0.10
 	github.com/tailscale/tailcat v0.7.0
 	github.com/vishvananda/netlink v1.3.1
 )
