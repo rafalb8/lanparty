@@ -145,16 +145,16 @@ func (h *Hub) Run(ctx context.Context) {
 }
 
 func (h *Hub) Close() {
-	if h.srv != nil {
-		h.srv.Close()
-	}
-
-	h.tap.Close()
-
 	h.mu.Lock()
 	for c := range h.clients {
 		c.Close()
 		delete(h.clients, c)
 	}
 	h.mu.Unlock()
+
+	if h.srv != nil {
+		h.srv.Close()
+	}
+
+	h.tap.Close()
 }

@@ -51,8 +51,17 @@ func NewBridge(ctx context.Context, token string, ipCIDR string, logger *slog.Lo
 }
 
 func (b *Bridge) Run(ctx context.Context) {
-	go b.netToTapLoop()
-	go b.tapToNetLoop()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	go func() {
+		defer cancel()
+		b.netToTapLoop()
+	}()
+	go func() {
+		defer cancel()
+		b.tapToNetLoop()
+	}()
 
 	<-ctx.Done()
 	b.Close()
