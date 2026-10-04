@@ -3,129 +3,51 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"math/rand"
-	"net"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
-
-	"github.com/songgao/water"
-	"github.com/spf13/pflag"
-	"github.com/tailscale/tailcat"
-	"github.com/vishvananda/netlink"
 )
 
 const (
-	MagicPort = 8245
-	IPRange   = "10.82.45.%d/24"
+	MagicPort     = 8245
+	IPRange       = "10.82.45.%d/24"
+	MaxBufferSize = 65535 // max uint16
 )
 
-func setupTap(ipCIDR string) *water.Interface {
-	ifce, err := water.New(water.Config{DeviceType: water.TAP})
-	if err != nil {
-		log.Fatalf("[!] Failed to create TAP: %v", err)
-	}
-
-	link, err := netlink.LinkByName(ifce.Name())
-	if err != nil {
-		log.Fatalf("[!] Failed to find link %s: %v", ifce.Name(), err)
-	}
-
-	addr, err := netlink.ParseAddr(ipCIDR)
-	if err != nil {
-		log.Fatalf("[!] Failed to parse address: %v", err)
-	}
-
-	err = netlink.AddrAdd(link, addr)
-	if err != nil {
-		log.Fatalf("[!] Failed to set IP: %v", err)
-	}
-
-	err = netlink.LinkSetUp(link)
-	if err != nil {
-		log.Fatalf("[!] Failed to bring link up: %v", err)
-	}
-
-	fmt.Printf("[*] Created virtual LAN interface %s with IP %s\n", ifce.Name(), ipCIDR)
-	return ifce
-}
-
-func server(tap *water.Interface) {
-	hub := &Hub{tap: tap}
-	go hub.TapLoop()
-
-	logf := func(format string, args ...any) {}
-	if Verbose {
-		logf = log.Printf
-	}
-
-	srv := &tailcat.Server{
-		OnTCP: func(port uint16) func(net.Conn) {
-			if port != MagicPort {
-				return nil
-			}
-			return hub.Add
-		},
-		Logf: logf,
-	}
-
-	err := srv.Start()
-	if err != nil {
-		log.Fatalf("[!] Failed to start server: %v", err)
-	}
-
-	fmt.Println("[+] Token:", srv.TailcatAddr())
-}
-
-func client(token tailcat.Addr, tap *water.Interface) {
-	fmt.Println("[*] Connecting to server...")
-
-	cli := tailcat.NewClient(token)
-	cli.Logf = func(format string, args ...any) {}
-	if Verbose {
-		cli.Logf = log.Printf
-	}
-
-	c, err := cli.DialTCPPort(context.Background(), MagicPort)
-	if err != nil {
-		log.Fatalf("[!] Failed to connect: %v", err)
-	}
-	fmt.Println("[+] Connected!")
-
-	bridge := &Bridge{tap: tap, conn: c}
-	go bridge.TapLoop()
-	go bridge.Loop()
-}
-
 func main() {
-	args := pflag.Args()
-	if len(args) > 1 {
-		pflag.Usage()
-		os.Exit(1)
+	cfg := parseFlags()
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	logLevel := slog.LevelInfo
+	if cfg.Verbose {
+		logLevel = slog.LevelDebug
 	}
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
 
-	id := 1
-	serverMode := len(args) == 0
-	if !serverMode {
-		rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-		id = rng.Intn(253) + 2
-	}
-
-	ip := fmt.Sprintf(IPRange, id)
-	tap := setupTap(ip)
-	defer tap.Close()
-
-	if serverMode {
-		server(tap)
+	if cfg.ServerMode {
+		ip := fmt.Sprintf(IPRange, 1)
+		hub, err := NewHub(ip, logger)
+		if err != nil {
+			fmt.Printf("[!] Hub initialization failed: %v\n", err)
+			return
+		}
+		hub.Run(ctx)
 	} else {
-		token := tailcat.Addr(args[0])
-		client(token, tap)
+		rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+		ip := fmt.Sprintf(IPRange, rng.Intn(253)+2)
+
+		bridge, err := NewBridge(ctx, cfg.Token, ip, logger)
+		if err != nil {
+			fmt.Printf("[!] Bridge initialization failed: %v\n", err)
+			return
+		}
+		bridge.Run(ctx)
 	}
 
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-	<-sig
-	fmt.Println("[-] Shutting down...")
+	fmt.Println("[-] Shutdown complete.")
 }
