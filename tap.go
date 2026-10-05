@@ -9,7 +9,9 @@ import (
 
 // setupTap creates, addresses, and brings up a TAP interface.
 func setupTap(ipCIDR string) (*water.Interface, error) {
-	ifce, err := water.New(water.Config{DeviceType: water.TAP})
+	cfg := water.Config{DeviceType: water.TAP, Name: "lp%d"}
+
+	ifce, err := water.New(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("tap: create interface: %w", err)
 	}
