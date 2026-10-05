@@ -31,7 +31,7 @@ func main() {
 
 	if cfg.ServerMode {
 		ip := fmt.Sprintf(IPRange, 1)
-		hub, err := NewHub(ip, cfg.TCPMode, logger)
+		hub, err := NewHub(ip, logger)
 		if err != nil {
 			fmt.Printf("[!] Hub initialization failed: %v\n", err)
 			return
@@ -41,7 +41,7 @@ func main() {
 		rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 		ip := fmt.Sprintf(IPRange, rng.Intn(253)+2)
 
-		bridge, err := NewBridge(ctx, cfg.Token, ip, cfg.TCPMode, logger)
+		bridge, err := NewBridge(ctx, cfg.Token, ip, logger)
 		if err != nil {
 			fmt.Printf("[!] Bridge initialization failed: %v\n", err)
 			return

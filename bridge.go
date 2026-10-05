@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 
@@ -19,7 +17,7 @@ type Bridge struct {
 	logger *slog.Logger
 }
 
-func NewBridge(ctx context.Context, token string, ipCIDR string, tcp bool, logger *slog.Logger) (*Bridge, error) {
+func NewBridge(ctx context.Context, token string, ipCIDR string, logger *slog.Logger) (*Bridge, error) {
 	fmt.Println("[*] Connecting to server...")
 
 	cli := tailcat.NewClient(tailcat.Addr(token))
@@ -27,13 +25,7 @@ func NewBridge(ctx context.Context, token string, ipCIDR string, tcp bool, logge
 		logger.Debug(fmt.Sprintf("bridge: tailcat: "+format, args...))
 	}
 
-	var conn net.Conn
-	var err error
-	if tcp {
-		conn, err = cli.DialTCPPort(ctx, MagicPort)
-	} else {
-		conn, err = cli.DialUDPPort(ctx, MagicPort)
-	}
+	conn, err := cli.DialUDPPort(ctx, MagicPort)
 	if err != nil {
 		cli.Close()
 		return nil, fmt.Errorf("dial tailcat server: %w", err)
@@ -83,23 +75,16 @@ func (b *Bridge) Close() {
 }
 
 func (b *Bridge) netToTapLoop() {
-	var lenBuf [2]byte
 	var buffer [MaxBufferSize]byte
 
 	for {
-		_, err := io.ReadFull(b.conn, lenBuf[:])
+		n, err := b.conn.Read(buffer[:])
 		if err != nil {
 			fmt.Println("[-] Disconnected from server.")
 			return
 		}
 
-		length := binary.BigEndian.Uint16(lenBuf[:])
-		buf := buffer[:length]
-		if _, err := io.ReadFull(b.conn, buf); err != nil {
-			return
-		}
-
-		_, err = b.tap.Write(buf)
+		_, err = b.tap.Write(buffer[:n])
 		if err != nil {
 			b.logger.Debug("bridge: failed to write frame to TAP", "err", err)
 			return
@@ -109,7 +94,6 @@ func (b *Bridge) netToTapLoop() {
 
 func (b *Bridge) tapToNetLoop() {
 	var buffer [MaxBufferSize]byte
-	frameBuf := make([]byte, MaxBufferSize+2)
 
 	for {
 		n, err := b.tap.Read(buffer[:])
@@ -117,10 +101,7 @@ func (b *Bridge) tapToNetLoop() {
 			return
 		}
 
-		binary.BigEndian.PutUint16(frameBuf[0:2], uint16(n))
-		copy(frameBuf[2:], buffer[:n])
-
-		_, err = b.conn.Write(frameBuf[:n+2])
+		_, err = b.conn.Write(buffer[:n])
 		if err != nil {
 			b.logger.Debug("bridge: failed to write frame to network", "err", err)
 			return
