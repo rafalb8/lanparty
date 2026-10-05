@@ -22,7 +22,7 @@ type Hub struct {
 	logger  *slog.Logger
 }
 
-func NewHub(ipCIDR string, logger *slog.Logger) (*Hub, error) {
+func NewHub(ipCIDR string, tcp bool, logger *slog.Logger) (*Hub, error) {
 	tap, err := setupTap(ipCIDR)
 	if err != nil {
 		return nil, fmt.Errorf("tap setup: %w", err)
@@ -36,15 +36,25 @@ func NewHub(ipCIDR string, logger *slog.Logger) (*Hub, error) {
 	}
 
 	hub.srv = &tailcat.Server{
-		OnTCP: func(port uint16) func(net.Conn) {
+		Logf: func(format string, args ...any) {
+			logger.Debug(fmt.Sprintf("tailcat: "+format, args...))
+		},
+	}
+
+	if tcp {
+		hub.srv.OnTCP = func(port uint16) func(net.Conn) {
 			if port != MagicPort {
 				return nil
 			}
 			return hub.add
-		},
-		Logf: func(format string, args ...any) {
-			logger.Debug(fmt.Sprintf("tailcat: "+format, args...))
-		},
+		}
+	} else {
+		hub.srv.OnUDP = func(port uint16) func(tailcat.ConnPacketConn) {
+			if port != MagicPort {
+				return nil
+			}
+			return func(c tailcat.ConnPacketConn) { hub.add(c) }
+		}
 	}
 
 	if err := hub.srv.Start(); err != nil {

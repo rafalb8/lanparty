@@ -10,12 +10,14 @@ import (
 type Config struct {
 	Verbose    bool
 	ServerMode bool
+	TCPMode    bool
 	Token      string
 }
 
 func parseFlags() Config {
 	var cfg Config
 	pflag.BoolVarP(&cfg.Verbose, "verbose", "v", false, "enable verbose debug logging")
+	pflag.BoolVar(&cfg.TCPMode, "tcp", false, "enable TCP mode")
 
 	pflag.Usage = func() {
 		fmt.Printf("Usage: %s [flags] [token]\n", os.Args[0])

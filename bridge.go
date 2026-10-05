@@ -19,7 +19,7 @@ type Bridge struct {
 	logger *slog.Logger
 }
 
-func NewBridge(ctx context.Context, token string, ipCIDR string, logger *slog.Logger) (*Bridge, error) {
+func NewBridge(ctx context.Context, token string, ipCIDR string, tcp bool, logger *slog.Logger) (*Bridge, error) {
 	fmt.Println("[*] Connecting to server...")
 
 	cli := tailcat.NewClient(tailcat.Addr(token))
@@ -27,7 +27,13 @@ func NewBridge(ctx context.Context, token string, ipCIDR string, logger *slog.Lo
 		logger.Debug(fmt.Sprintf("bridge: tailcat: "+format, args...))
 	}
 
-	conn, err := cli.DialTCPPort(ctx, MagicPort)
+	var conn net.Conn
+	var err error
+	if tcp {
+		conn, err = cli.DialTCPPort(ctx, MagicPort)
+	} else {
+		conn, err = cli.DialUDPPort(ctx, MagicPort)
+	}
 	if err != nil {
 		cli.Close()
 		return nil, fmt.Errorf("dial tailcat server: %w", err)
