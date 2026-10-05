@@ -9,12 +9,14 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/tailscale/tailcat"
 )
 
 const (
 	MagicPort     = 8245
 	IPRange       = "10.82.45.%d/24"
-	MaxBufferSize = 65535 // max uint16
+	MaxBufferSize = tailcat.MaxUDPPayload
 )
 
 func main() {
