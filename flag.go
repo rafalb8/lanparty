@@ -10,6 +10,7 @@ import (
 
 type Config struct {
 	Verbose    bool
+	CopyToken  bool
 	ServerMode bool
 	Token      string
 }
@@ -22,6 +23,7 @@ func parseFlags(args []string) (Config, error) {
 	flags := pflag.NewFlagSet("lanparty", pflag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	flags.BoolVarP(&cfg.Verbose, "verbose", "v", false, "enable verbose debug logging")
+	flags.BoolVarP(&cfg.CopyToken, "copy-token", "c", true, "copy the server token to the clipboard")
 
 	err := flags.Parse(args)
 	if err != nil {

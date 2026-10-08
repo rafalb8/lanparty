@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"os"
 	"sync"
 
 	"github.com/songgao/water"
@@ -72,7 +73,11 @@ func NewBridge(ctx context.Context, token string, logger *slog.Logger) (*Bridge,
 	}
 	bridge.data = data
 
-	printClientInfo(tap.Name(), cidr)
+	printInfo(os.Stdout, "LAN Party",
+		"Address:", cidr,
+		"Interface:", tap.Name(),
+		"Status:", "Connected",
+	)
 
 	return bridge, nil
 }

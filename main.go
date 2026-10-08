@@ -12,6 +12,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/tailscale/tailcat"
+	"golang.design/x/clipboard"
 )
 
 const (
@@ -53,7 +54,7 @@ func main() {
 
 func run(ctx context.Context, cfg Config, logger *slog.Logger) error {
 	if cfg.ServerMode {
-		hub, err := NewHub(logger)
+		hub, err := NewHub(logger, cfg.CopyToken)
 		if err != nil {
 			return err
 		}
@@ -68,47 +69,30 @@ func run(ctx context.Context, cfg Config, logger *slog.Logger) error {
 	return bridge.Run(ctx)
 }
 
-func printServerInfo(tapName string, token string) {
-	printInfo(os.Stdout, "LAN Party Server", []string{
-		"Address", serverCIDR,
-		"Interface", tapName,
-		"Control", fmt.Sprintf("TCP :%d", controlPort),
-		"Data", fmt.Sprintf("UDP :%d", dataPort),
-		"Token", token,
-	})
-}
-
-func printClientInfo(tapName string, cidr string) {
-	printInfo(os.Stdout, "LAN Party", []string{
-		"Address", cidr,
-		"Interface", tapName,
-		"Status", "Connected",
-	})
-}
-
-func printPlayerStatus(connected bool, cidr string) {
-	status := "Player disconnected"
-	if connected {
-		status = "Player connected"
+func printInfo(wr io.Writer, title string, rows ...string) {
+	if title != "" {
+		fmt.Fprintln(wr)
+		fmt.Fprintln(wr, title)
+		fmt.Fprintln(wr, "──────────────")
 	}
-
-	w := tabwriter.NewWriter(os.Stdout, 0, 4, 1, ' ', 0)
-	_, err := fmt.Fprintf(w, "%s\t%s\n", status, cidr)
-	if err != nil {
-		return
-	}
-	w.Flush()
-}
-
-func printInfo(wr io.Writer, title string, rows []string) {
-	fmt.Fprintln(wr)
-	fmt.Fprintln(wr, title)
-	fmt.Fprintln(wr, "──────────────")
 
 	w := tabwriter.NewWriter(wr, 0, 4, 1, ' ', 0)
 	for i := 0; i < len(rows); i += 2 {
-		fmt.Fprintf(w, "%s:\t%s\n", rows[i], rows[i+1])
+		fmt.Fprintf(w, "%s\t%s\n", rows[i], rows[i+1])
 	}
 	w.Flush()
-	fmt.Fprintln(wr)
+
+	if title != "" {
+		fmt.Fprintln(wr)
+	}
+}
+
+func copyToClipboard(token string) error {
+	err := clipboard.Init()
+	if err != nil {
+		return err
+	}
+
+	_, err = clipboard.Write(context.Background(), clipboard.FmtText, []byte(token))
+	return err
 }

@@ -9,6 +9,7 @@ import (
 	"maps"
 	"net"
 	"net/netip"
+	"os"
 	"slices"
 	"sync"
 	"time"
@@ -39,14 +40,14 @@ type client struct {
 	data   tailcat.ConnPacketConn
 }
 
-func NewHub(logger *slog.Logger) (*Hub, error) {
+func NewHub(logger *slog.Logger, copyTokenToClipboard bool) (*Hub, error) {
 	tap, err := createTap()
 	if err != nil {
 		return nil, err
 	}
 
 	hub := &Hub{
-		clients: map[netip.Addr]*client{},
+		clients: make(map[netip.Addr]*client),
 		tap:     tap,
 		logger:  logger,
 	}
@@ -87,7 +88,23 @@ func NewHub(logger *slog.Logger) (*Hub, error) {
 		return nil, fmt.Errorf("start tailcat server: %w", err)
 	}
 
-	printServerInfo(tap.Name(), string(hub.srv.TailcatAddr()))
+	token := string(hub.srv.TailcatAddr())
+	printInfo(
+		os.Stdout, "LAN Party Server",
+		"Address:", serverCIDR,
+		"Interface:", tap.Name(),
+		"Control:", fmt.Sprintf("TCP :%d", controlPort),
+		"Data:", fmt.Sprintf("UDP :%d", dataPort),
+		"Token:", token,
+	)
+	if copyTokenToClipboard {
+		err = copyToClipboard(token)
+		if err != nil {
+			logger.Warn("failed to copy server token to clipboard", "err", err)
+		} else {
+			fmt.Fprintln(os.Stdout, "Token copied to clipboard")
+		}
+	}
 
 	return hub, nil
 }
@@ -138,7 +155,7 @@ func (h *Hub) handleControl(conn net.Conn) {
 	}
 
 	cidr := client.addr.String() + "/24"
-	printPlayerStatus(true, cidr)
+	printInfo(os.Stdout, "", "Player connected", cidr)
 	h.logger.Debug("player connected", "peer", peer, "address", cidr)
 
 	_, err = io.Copy(io.Discard, conn)
@@ -257,7 +274,7 @@ func (h *Hub) removeClient(peer netip.Addr, client *client) {
 	client.close()
 
 	cidr := client.addr.String() + "/24"
-	printPlayerStatus(false, cidr)
+	printInfo(os.Stdout, "", "Player disconnected", cidr)
 	h.logger.Debug("player disconnected", "peer", peer, "address", cidr)
 }
 
