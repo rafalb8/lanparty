@@ -2,9 +2,11 @@ package main
 
 import (
 	"fmt"
+	"net"
 
 	"github.com/songgao/water"
 	"github.com/vishvananda/netlink"
+	"tailscale.com/net/netmon"
 )
 
 // setupTap creates, addresses, and brings up a TAP interface.
@@ -45,6 +47,24 @@ func setupTap(ipCIDR string) (*water.Interface, error) {
 		ifce.Close()
 		return nil, fmt.Errorf("tap: setting mtu: %w", err)
 	}
+
+	// Hide our iface from Tailcat
+	netmon.RegisterInterfaceGetter(func() ([]netmon.Interface, error) {
+		ifaces, err := net.Interfaces()
+		if err != nil {
+			return nil, err
+		}
+
+		result := make([]netmon.Interface, 0, len(ifaces))
+		for i := range ifaces {
+			if ifaces[i].Name == ifce.Name() {
+				continue
+			}
+			result = append(result, netmon.Interface{Interface: &ifaces[i]})
+		}
+
+		return result, nil
+	})
 
 	return ifce, nil
 }

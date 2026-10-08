@@ -7,6 +7,7 @@ require (
 	github.com/spf13/pflag v1.0.10
 	github.com/tailscale/tailcat v0.7.0
 	github.com/vishvananda/netlink v1.3.1
+	tailscale.com v1.103.0-pre.0.20260916030321-a2263542f260
 )
 
 require (
@@ -57,5 +58,4 @@ require (
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	golang.zx2c4.com/wireguard/windows v0.5.3 // indirect
 	gvisor.dev/gvisor v0.0.0-20260915211658-a6f909f08a72 // indirect
-	tailscale.com v1.103.0-pre.0.20260916030321-a2263542f260 // indirect
 )
