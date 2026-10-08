@@ -29,7 +29,7 @@ func main() {
 	if cfg.Verbose {
 		logLevel = slog.LevelDebug
 	}
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel}))
 
 	if cfg.ServerMode {
 		ip := fmt.Sprintf(IPRange, 1)
