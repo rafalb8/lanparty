@@ -2,54 +2,113 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
-	"math/rand"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
+	"text/tabwriter"
 
 	"github.com/tailscale/tailcat"
 )
 
 const (
-	MagicPort     = 8245
-	IPRange       = "10.82.45.%d/24"
-	MaxBufferSize = tailcat.MaxUDPPayload
+	controlPort = 8245
+	dataPort    = 8246
+
+	serverCIDR = "10.82.45.1/24"
+
+	maxBufferSize = tailcat.MaxUDPPayload
 )
 
 func main() {
-	cfg := parseFlags()
+	cfg, err := parseFlags(os.Args[1:])
+	if err != nil {
+		if errors.Is(err, errHelp) {
+			return
+		}
+
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(2)
+	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	logLevel := slog.LevelInfo
+	level := slog.LevelInfo
 	if cfg.Verbose {
-		logLevel = slog.LevelDebug
+		level = slog.LevelDebug
 	}
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel}))
 
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+
+	err = run(ctx, cfg, logger)
+	if err != nil && !errors.Is(err, context.Canceled) {
+		logger.Error("lanparty stopped", "err", err)
+		os.Exit(1)
+	}
+}
+
+func run(ctx context.Context, cfg Config, logger *slog.Logger) error {
 	if cfg.ServerMode {
-		ip := fmt.Sprintf(IPRange, 1)
-		hub, err := NewHub(ip, logger)
+		hub, err := NewHub(logger)
 		if err != nil {
-			fmt.Printf("[!] Hub initialization failed: %v\n", err)
-			return
+			return err
 		}
-		hub.Run(ctx)
-	} else {
-		rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-		ip := fmt.Sprintf(IPRange, rng.Intn(253)+2)
-
-		bridge, err := NewBridge(ctx, cfg.Token, ip, logger)
-		if err != nil {
-			fmt.Printf("[!] Bridge initialization failed: %v\n", err)
-			return
-		}
-		bridge.Run(ctx)
+		return hub.Run(ctx)
 	}
 
-	fmt.Println("[-] Shutdown complete.")
+	bridge, err := NewBridge(ctx, cfg.Token, logger)
+	if err != nil {
+		return err
+	}
+
+	return bridge.Run(ctx)
+}
+
+func printServerInfo(tapName string, token string) {
+	printInfo(os.Stdout, "LAN Party Server", []string{
+		"Address", serverCIDR,
+		"Interface", tapName,
+		"Control", fmt.Sprintf("TCP :%d", controlPort),
+		"Data", fmt.Sprintf("UDP :%d", dataPort),
+		"Token", token,
+	})
+}
+
+func printClientInfo(tapName string, cidr string) {
+	printInfo(os.Stdout, "LAN Party", []string{
+		"Address", cidr,
+		"Interface", tapName,
+		"Status", "Connected",
+	})
+}
+
+func printPlayerStatus(connected bool, cidr string) {
+	status := "Player disconnected"
+	if connected {
+		status = "Player connected"
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 4, 1, ' ', 0)
+	_, err := fmt.Fprintf(w, "%s\t%s\n", status, cidr)
+	if err != nil {
+		return
+	}
+	w.Flush()
+}
+
+func printInfo(wr io.Writer, title string, rows []string) {
+	fmt.Fprintln(wr)
+	fmt.Fprintln(wr, title)
+	fmt.Fprintln(wr, "──────────────")
+
+	w := tabwriter.NewWriter(wr, 0, 4, 1, ' ', 0)
+	for i := 0; i < len(rows); i += 2 {
+		fmt.Fprintf(w, "%s:\t%s\n", rows[i], rows[i+1])
+	}
+	w.Flush()
+	fmt.Fprintln(wr)
 }

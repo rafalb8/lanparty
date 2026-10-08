@@ -9,62 +9,68 @@ import (
 	"tailscale.com/net/netmon"
 )
 
-// setupTap creates, addresses, and brings up a TAP interface.
-func setupTap(ipCIDR string) (*water.Interface, error) {
-	cfg := water.Config{DeviceType: water.TAP, Name: "lp%d"}
+const tapMTU = 1218
 
-	ifce, err := water.New(cfg)
+func createTap() (*water.Interface, error) {
+	ifce, err := water.New(water.Config{DeviceType: water.TAP, Name: "lp%d"})
 	if err != nil {
 		return nil, fmt.Errorf("tap: create interface: %w", err)
 	}
 
-	link, err := netlink.LinkByName(ifce.Name())
+	name := ifce.Name()
+
+	link, err := netlink.LinkByName(name)
 	if err != nil {
 		ifce.Close()
-		return nil, fmt.Errorf("tap: find link %s: %w", ifce.Name(), err)
+		return nil, fmt.Errorf("tap: find link %s: %w", name, err)
 	}
 
-	addr, err := netlink.ParseAddr(ipCIDR)
+	err = netlink.LinkSetMTU(link, tapMTU)
 	if err != nil {
 		ifce.Close()
-		return nil, fmt.Errorf("tap: parse IP address %s: %w", ipCIDR, err)
+		return nil, fmt.Errorf("tap: set mtu: %w", err)
 	}
 
-	err = netlink.AddrAdd(link, addr)
-	if err != nil {
-		ifce.Close()
-		return nil, fmt.Errorf("tap: add IP to link: %w", err)
-	}
-
-	err = netlink.LinkSetUp(link)
-	if err != nil {
-		ifce.Close()
-		return nil, fmt.Errorf("tap: bring link up: %w", err)
-	}
-
-	err = netlink.LinkSetMTU(link, 1218)
-	if err != nil {
-		ifce.Close()
-		return nil, fmt.Errorf("tap: setting mtu: %w", err)
-	}
-
-	// Hide our iface from Tailcat
 	netmon.RegisterInterfaceGetter(func() ([]netmon.Interface, error) {
-		ifaces, err := net.Interfaces()
+		interfaces, err := net.Interfaces()
 		if err != nil {
 			return nil, err
 		}
 
-		result := make([]netmon.Interface, 0, len(ifaces))
-		for i := range ifaces {
-			if ifaces[i].Name == ifce.Name() {
+		result := make([]netmon.Interface, 0, len(interfaces))
+		for i := range interfaces {
+			if interfaces[i].Name == name {
 				continue
 			}
-			result = append(result, netmon.Interface{Interface: &ifaces[i]})
+			result = append(result, netmon.Interface{Interface: &interfaces[i]})
 		}
 
 		return result, nil
 	})
 
 	return ifce, nil
+}
+
+func configureTap(ifce *water.Interface, cidr string) error {
+	link, err := netlink.LinkByName(ifce.Name())
+	if err != nil {
+		return fmt.Errorf("tap: find link %s: %w", ifce.Name(), err)
+	}
+
+	addr, err := netlink.ParseAddr(cidr)
+	if err != nil {
+		return fmt.Errorf("tap: parse IP address %s: %w", cidr, err)
+	}
+
+	err = netlink.AddrAdd(link, addr)
+	if err != nil {
+		return fmt.Errorf("tap: add IP to link: %w", err)
+	}
+
+	err = netlink.LinkSetUp(link)
+	if err != nil {
+		return fmt.Errorf("tap: bring link up: %w", err)
+	}
+
+	return nil
 }
