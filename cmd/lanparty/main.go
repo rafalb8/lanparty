@@ -4,24 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
-	"text/tabwriter"
 
-	"github.com/tailscale/tailcat"
-	"golang.design/x/clipboard"
-)
-
-const (
-	controlPort = 8245
-	dataPort    = 8246
-
-	serverCIDR = "10.82.45.1/24"
-
-	maxBufferSize = tailcat.MaxUDPPayload
+	"github.com/rafalb8/lanparty/internal/lanparty"
 )
 
 func main() {
@@ -54,45 +42,17 @@ func main() {
 
 func run(ctx context.Context, cfg Config, logger *slog.Logger) error {
 	if cfg.ServerMode {
-		hub, err := NewHub(logger, cfg.CopyToken)
+		hub, err := lanparty.NewHub(logger, cfg.CopyToken)
 		if err != nil {
 			return err
 		}
 		return hub.Run(ctx)
 	}
 
-	bridge, err := NewBridge(ctx, cfg.Token, logger)
+	bridge, err := lanparty.NewBridge(ctx, cfg.Token, logger)
 	if err != nil {
 		return err
 	}
 
 	return bridge.Run(ctx)
-}
-
-func printInfo(wr io.Writer, title string, rows ...string) {
-	if title != "" {
-		fmt.Fprintln(wr)
-		fmt.Fprintln(wr, title)
-		fmt.Fprintln(wr, "──────────────")
-	}
-
-	w := tabwriter.NewWriter(wr, 0, 4, 1, ' ', 0)
-	for i := 0; i < len(rows); i += 2 {
-		fmt.Fprintf(w, "%s\t%s\n", rows[i], rows[i+1])
-	}
-	w.Flush()
-
-	if title != "" {
-		fmt.Fprintln(wr)
-	}
-}
-
-func copyToClipboard(token string) error {
-	err := clipboard.Init()
-	if err != nil {
-		return err
-	}
-
-	_, err = clipboard.Write(context.Background(), clipboard.FmtText, []byte(token))
-	return err
 }

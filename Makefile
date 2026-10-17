@@ -3,7 +3,7 @@ BINARY := lanparty
 .PHONY: build clean
 
 build:
-	CGO_ENABLED=0 go build -o $(BINARY) .
+	CGO_ENABLED=0 go build -o $(BINARY) ./cmd/lanparty
 	sudo setcap cap_net_admin+ep $(BINARY)
 
 clean:
