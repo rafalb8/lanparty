@@ -6,6 +6,7 @@ import (
 
 	"github.com/songgao/water"
 	"github.com/vishvananda/netlink"
+	"github.com/vishvananda/netns"
 	"tailscale.com/net/netmon"
 )
 
@@ -51,8 +52,29 @@ func createTap() (*water.Interface, error) {
 	return ifce, nil
 }
 
-func configureTap(ifce *water.Interface, cidr string) error {
-	link, err := netlink.LinkByName(ifce.Name())
+func configureTap(ifce *water.Interface, cidr string, namespace *Namespace) error {
+	target := netns.None()
+	if namespace != nil {
+		link, err := netlink.LinkByName(ifce.Name())
+		if err != nil {
+			return fmt.Errorf("tap: find link %s: %w", ifce.Name(), err)
+		}
+
+		err = netlink.LinkSetNsFd(link, int(namespace.fd))
+		if err != nil {
+			return fmt.Errorf("tap: move into namespace: %w", err)
+		}
+
+		target = namespace.fd
+	}
+
+	handle, err := netlink.NewHandleAt(target)
+	if err != nil {
+		return fmt.Errorf("tap: open netlink handle: %w", err)
+	}
+	defer handle.Close()
+
+	link, err := handle.LinkByName(ifce.Name())
 	if err != nil {
 		return fmt.Errorf("tap: find link %s: %w", ifce.Name(), err)
 	}
@@ -62,14 +84,35 @@ func configureTap(ifce *water.Interface, cidr string) error {
 		return fmt.Errorf("tap: parse IP address %s: %w", cidr, err)
 	}
 
-	err = netlink.AddrAdd(link, addr)
+	err = handle.AddrAdd(link, addr)
 	if err != nil {
 		return fmt.Errorf("tap: add IP to link: %w", err)
 	}
 
-	err = netlink.LinkSetUp(link)
+	err = handle.LinkSetUp(link)
 	if err != nil {
 		return fmt.Errorf("tap: bring link up: %w", err)
+	}
+
+	if namespace != nil {
+		loopback, err := handle.LinkByName("lo")
+		if err != nil {
+			return fmt.Errorf("tap: find loopback: %w", err)
+		}
+
+		err = handle.LinkSetUp(loopback)
+		if err != nil {
+			return fmt.Errorf("tap: bring loopback up: %w", err)
+		}
+
+		err = handle.RouteAdd(&netlink.Route{
+			LinkIndex: link.Attrs().Index,
+			Dst:       &net.IPNet{IP: net.IPv4zero, Mask: net.CIDRMask(0, 32)},
+			Scope:     netlink.SCOPE_LINK,
+		})
+		if err != nil {
+			return fmt.Errorf("tap: set default route: %w", err)
+		}
 	}
 
 	return nil

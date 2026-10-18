@@ -4,7 +4,7 @@ BINARY := lanparty
 
 build:
 	CGO_ENABLED=0 go build -o $(BINARY) ./cmd/lanparty
-	sudo setcap cap_net_admin+ep $(BINARY)
+	sudo setcap cap_net_admin,cap_sys_admin+ep $(BINARY)
 
 clean:
 	rm -f $(BINARY)

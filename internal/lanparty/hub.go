@@ -40,7 +40,7 @@ type client struct {
 	data   tailcat.ConnPacketConn
 }
 
-func NewHub(logger *slog.Logger, copyTokenToClipboard bool) (*Hub, error) {
+func NewHub(logger *slog.Logger, copyTokenToClipboard bool, namespace *Namespace) (*Hub, error) {
 	tap, err := createTap()
 	if err != nil {
 		return nil, err
@@ -75,7 +75,7 @@ func NewHub(logger *slog.Logger, copyTokenToClipboard bool) (*Hub, error) {
 		UDPIdleTimeout: 24 * time.Hour,
 	}
 
-	err = configureTap(tap, serverCIDR)
+	err = configureTap(tap, serverCIDR, namespace)
 	if err != nil {
 		hub.Close()
 		return nil, fmt.Errorf("configure server TAP: %w", err)

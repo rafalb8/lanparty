@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 
@@ -13,6 +14,7 @@ type Config struct {
 	CopyToken  bool
 	ServerMode bool
 	Token      string
+	Namespace  bool
 }
 
 var errHelp = errors.New("help requested")
@@ -22,8 +24,13 @@ func parseFlags(args []string) (Config, error) {
 
 	flags := pflag.NewFlagSet("lanparty", pflag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
+	flags.Usage = func() {
+		fmt.Fprintln(os.Stderr, "Usage: lanparty [flags] [token]\n       lanparty exec [NAME=value ...] <command> [args...]")
+		flags.PrintDefaults()
+	}
 	flags.BoolVarP(&cfg.Verbose, "verbose", "v", false, "enable verbose debug logging")
 	flags.BoolVarP(&cfg.CopyToken, "copy-token", "c", true, "copy the server token to the clipboard")
+	flags.BoolVarP(&cfg.Namespace, "namespace", "n", false, "isolate the LAN interface for lanparty exec")
 
 	err := flags.Parse(args)
 	if err != nil {

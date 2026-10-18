@@ -13,6 +13,16 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "exec" {
+		err := execCommand(os.Args[2:])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+
+		return
+	}
+
 	cfg, err := parseFlags(os.Args[1:])
 	if err != nil {
 		if errors.Is(err, errHelp) {
@@ -41,18 +51,38 @@ func main() {
 }
 
 func run(ctx context.Context, cfg Config, logger *slog.Logger) error {
-	if cfg.ServerMode {
-		hub, err := lanparty.NewHub(logger, cfg.CopyToken)
+	var namespace *lanparty.Namespace
+	var err error
+
+	if cfg.Namespace {
+		namespace, err = lanparty.NewNamespace()
 		if err != nil {
 			return err
 		}
-		return hub.Run(ctx)
+		defer namespace.Close()
 	}
 
-	bridge, err := lanparty.NewBridge(ctx, cfg.Token, logger)
+	var session interface {
+		Run(context.Context) error
+		Close()
+	}
+
+	if cfg.ServerMode {
+		session, err = lanparty.NewHub(logger, cfg.CopyToken, namespace)
+	} else {
+		session, err = lanparty.NewBridge(ctx, cfg.Token, logger, namespace)
+	}
 	if err != nil {
 		return err
 	}
+	defer session.Close()
 
-	return bridge.Run(ctx)
+	if namespace != nil {
+		err = namespace.Publish()
+		if err != nil {
+			return err
+		}
+	}
+
+	return session.Run(ctx)
 }

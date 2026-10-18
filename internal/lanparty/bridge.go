@@ -25,7 +25,7 @@ type Bridge struct {
 	closeOnce sync.Once
 }
 
-func NewBridge(ctx context.Context, token string, logger *slog.Logger) (*Bridge, error) {
+func NewBridge(ctx context.Context, token string, logger *slog.Logger, namespace *Namespace) (*Bridge, error) {
 	tap, err := createTap()
 	if err != nil {
 		return nil, err
@@ -60,7 +60,7 @@ func NewBridge(ctx context.Context, token string, logger *slog.Logger) (*Bridge,
 
 	addr := netip.AddrFrom4([4]byte{10, 82, 45, host[0]})
 	cidr := addr.String() + "/24"
-	err = configureTap(tap, cidr)
+	err = configureTap(tap, cidr, namespace)
 	if err != nil {
 		bridge.Close()
 		return nil, fmt.Errorf("configure client TAP: %w", err)
