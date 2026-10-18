@@ -2,6 +2,7 @@ package tap
 
 import (
 	"fmt"
+	"io"
 	"net"
 
 	"github.com/rafalb8/lanparty/internal/namespace"
@@ -95,29 +96,47 @@ func Configure(ifce *water.Interface, cidr string, namespace *namespace.Namespac
 		return fmt.Errorf("tap: bring link up: %w", err)
 	}
 
-	if namespace != nil {
-		loopback, err := handle.LinkByName("lo")
+	if namespace == nil {
+		return nil
+	}
+
+	loopback, err := handle.LinkByName("lo")
+	if err != nil {
+		return fmt.Errorf("tap: find loopback: %w", err)
+	}
+
+	err = handle.LinkSetUp(loopback)
+	if err != nil {
+		return fmt.Errorf("tap: bring loopback up: %w", err)
+	}
+
+	if namespace.HasInternet() {
+		return nil
+	}
+
+	err = handle.RouteAdd(&netlink.Route{
+		LinkIndex: link.Attrs().Index,
+		Dst:       &net.IPNet{IP: net.IPv4zero, Mask: net.CIDRMask(0, 32)},
+		Scope:     netlink.SCOPE_LINK,
+	})
+	if err != nil {
+		return fmt.Errorf("tap: set default route: %w", err)
+	}
+
+	return nil
+}
+
+func WriteFrame(iface *water.Interface, frame []byte) error {
+	for len(frame) > 0 {
+		written, err := iface.Write(frame)
 		if err != nil {
-			return fmt.Errorf("tap: find loopback: %w", err)
+			return err
+		}
+		if written == 0 {
+			return io.ErrShortWrite
 		}
 
-		err = handle.LinkSetUp(loopback)
-		if err != nil {
-			return fmt.Errorf("tap: bring loopback up: %w", err)
-		}
-
-		if namespace.HasInternet() {
-			return nil
-		}
-
-		err = handle.RouteAdd(&netlink.Route{
-			LinkIndex: link.Attrs().Index,
-			Dst:       &net.IPNet{IP: net.IPv4zero, Mask: net.CIDRMask(0, 32)},
-			Scope:     netlink.SCOPE_LINK,
-		})
-		if err != nil {
-			return fmt.Errorf("tap: set default route: %w", err)
-		}
+		frame = frame[written:]
 	}
 
 	return nil

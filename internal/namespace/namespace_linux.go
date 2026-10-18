@@ -43,6 +43,7 @@ func New(internet bool, subnet netip.Prefix) (*Namespace, error) {
 			return nil, fmt.Errorf("namespace internet: %w", err)
 		}
 	}
+
 	return n, nil
 }
 
@@ -51,6 +52,7 @@ func inNamespace(fd netns.NsHandle, setup func() error) error {
 	ready := make(chan error, 1)
 	go func() {
 		runtime.LockOSThread()
+
 		original, err := netns.Get()
 		if err != nil {
 			runtime.UnlockOSThread()
@@ -58,6 +60,7 @@ func inNamespace(fd netns.NsHandle, setup func() error) error {
 			return
 		}
 		defer original.Close()
+
 		if fd != netns.None() {
 			err = netns.Set(fd)
 			if err != nil {
@@ -66,6 +69,7 @@ func inNamespace(fd netns.NsHandle, setup func() error) error {
 				return
 			}
 		}
+
 		setupErr := setup()
 		err = netns.Set(original)
 		if err != nil {
@@ -73,9 +77,11 @@ func inNamespace(fd netns.NsHandle, setup func() error) error {
 			ready <- fmt.Errorf("restore host namespace: %w", err)
 			return
 		}
+
 		runtime.UnlockOSThread()
 		ready <- setupErr
 	}()
+
 	return <-ready
 }
 
@@ -137,6 +143,7 @@ func (n *Namespace) Publish() error {
 			n.sendNamespace(conn)
 		}
 	}()
+
 	return nil
 }
 
@@ -166,6 +173,7 @@ func (n *Namespace) Close() {
 	if n.internet != nil {
 		n.internet.close()
 	}
+
 	n.fd.Close()
 }
 

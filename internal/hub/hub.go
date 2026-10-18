@@ -6,11 +6,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"maps"
 	"net"
 	"net/netip"
 	"os"
-	"slices"
 	"sync"
 	"time"
 
@@ -58,10 +56,6 @@ func New(logger *slog.Logger, namespace *namespace.Namespace, subnet netip.Prefi
 		subnet:  subnet,
 	}
 
-	hub.used[0] = true
-	hub.used[1] = true
-	hub.used[255] = true
-
 	hub.srv = &tailcat.Server{
 		Logf: func(format string, args ...any) {
 			logger.Debug(fmt.Sprintf("tailcat: "+format, args...))
@@ -90,8 +84,7 @@ func New(logger *slog.Logger, namespace *namespace.Namespace, subnet netip.Prefi
 
 	err = hub.srv.Start()
 	if err != nil {
-		hub.srv.Close()
-		hub.tap.Close()
+		hub.Close()
 		return nil, fmt.Errorf("start tailcat server: %w", err)
 	}
 
@@ -116,6 +109,8 @@ func New(logger *slog.Logger, namespace *namespace.Namespace, subnet netip.Prefi
 }
 
 func (h *Hub) Run(ctx context.Context) error {
+	defer h.Close()
+
 	errCh := make(chan error, 1)
 
 	go func() {
@@ -124,14 +119,13 @@ func (h *Hub) Run(ctx context.Context) error {
 
 	select {
 	case <-ctx.Done():
-		h.Close()
 		return nil
 
 	case err := <-errCh:
-		h.Close()
 		if err != nil && !errors.Is(err, net.ErrClosed) && !errors.Is(err, io.EOF) {
 			return err
 		}
+
 		return nil
 	}
 }
@@ -207,7 +201,7 @@ func (h *Hub) handleData(conn tailcat.ConnPacketConn) {
 			continue
 		}
 
-		err = h.writeTap(buffer[:n])
+		err = tap.WriteFrame(h.tap, buffer[:n])
 		if err != nil {
 			h.logger.Debug("failed to write frame to TAP", "peer", peer, "err", err)
 			return
@@ -288,14 +282,15 @@ func (h *Hub) removeClient(peer netip.Addr, client *client) {
 
 func (h *Hub) broadcast(frame []byte, exclude *client) {
 	h.mu.RLock()
-	clients := slices.Collect(maps.Values(h.clients))
+	clients := make([]*client, 0, len(h.clients))
+	for _, client := range h.clients {
+		if client != exclude {
+			clients = append(clients, client)
+		}
+	}
 	h.mu.RUnlock()
 
 	for _, client := range clients {
-		if client == exclude {
-			continue
-		}
-
 		err := client.writeData(frame)
 		if err != nil && !errors.Is(err, net.ErrClosed) {
 			h.logger.Debug("failed to broadcast frame", "peer", client.peer, "err", err)
@@ -303,32 +298,13 @@ func (h *Hub) broadcast(frame []byte, exclude *client) {
 	}
 }
 
-func (h *Hub) writeTap(frame []byte) error {
-	written := 0
-	for written < len(frame) {
-		n, err := h.tap.Write(frame[written:])
-		if err != nil {
-			return err
-		}
-		if n == 0 {
-			return io.ErrShortWrite
-		}
-		written += n
-	}
-	return nil
-}
-
 func (h *Hub) Close() {
 	h.closeOnce.Do(func() {
 		h.mu.Lock()
 		h.closed = true
 
-		clients := slices.Collect(maps.Values(h.clients))
-		clear(h.clients)
-		for _, client := range clients {
-			h.used[client.addr.As4()[3]] = false
-		}
-
+		clients := h.clients
+		h.clients = nil
 		h.mu.Unlock()
 
 		for _, client := range clients {
@@ -385,14 +361,7 @@ func (c *client) writeData(frame []byte) error {
 }
 
 func (c *client) close() {
-	c.dataMu.Lock()
-	data := c.data
-	c.data = nil
-	c.dataMu.Unlock()
-
-	if data != nil {
-		data.Close()
-	}
+	c.setData(nil)
 
 	if c.control != nil {
 		c.control.Close()

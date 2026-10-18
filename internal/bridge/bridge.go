@@ -37,13 +37,18 @@ type Bridge struct {
 	closeOnce sync.Once
 }
 
-func New(ctx context.Context, cfg Config) (*Bridge, error) {
+func New(ctx context.Context, cfg Config) (result *Bridge, err error) {
 	iface, err := tap.Create()
 	if err != nil {
 		return nil, err
 	}
 
 	bridge := &Bridge{Config: cfg, tap: iface}
+	defer func() {
+		if err != nil {
+			bridge.Close()
+		}
+	}()
 
 	cli := tailcat.NewClient(tailcat.Addr(cfg.Token))
 	cli.Logf = func(format string, args ...any) {
@@ -53,7 +58,6 @@ func New(ctx context.Context, cfg Config) (*Bridge, error) {
 
 	control, err := cli.DialTCPPort(ctx, config.ControlPort)
 	if err != nil {
-		bridge.Close()
 		return nil, fmt.Errorf("dial control connection: %w", err)
 	}
 	bridge.control = control
@@ -61,12 +65,10 @@ func New(ctx context.Context, cfg Config) (*Bridge, error) {
 	var host [1]byte
 	_, err = io.ReadFull(control, host[:])
 	if err != nil {
-		bridge.Close()
 		return nil, fmt.Errorf("read assigned address: %w", err)
 	}
 
 	if host[0] < 2 || host[0] > 254 {
-		bridge.Close()
 		return nil, fmt.Errorf("server assigned invalid host number: %d", host[0])
 	}
 
@@ -75,18 +77,17 @@ func New(ctx context.Context, cfg Config) (*Bridge, error) {
 	cidr := netip.PrefixFrom(netip.AddrFrom4(addr), cfg.Subnet.Bits()).String()
 	err = tap.Configure(iface, cidr, cfg.Namespace)
 	if err != nil {
-		bridge.Close()
 		return nil, fmt.Errorf("configure client TAP: %w", err)
 	}
 
 	data, err := cli.DialUDPPort(ctx, config.DataPort)
 	if err != nil {
-		bridge.Close()
 		return nil, fmt.Errorf("dial data connection: %w", err)
 	}
 	bridge.data = data
 
-	console.PrintInfo(os.Stdout, "LAN Party",
+	console.PrintInfo(
+		os.Stdout, "LAN Party",
 		"Address:", cidr,
 		"Interface:", iface.Name(),
 		"Status:", "Connected",
@@ -96,6 +97,8 @@ func New(ctx context.Context, cfg Config) (*Bridge, error) {
 }
 
 func (b *Bridge) Run(ctx context.Context) error {
+	defer b.Close()
+
 	errCh := make(chan error, 3)
 
 	go func() {
@@ -112,20 +115,19 @@ func (b *Bridge) Run(ctx context.Context) error {
 
 	select {
 	case <-ctx.Done():
-		b.Close()
 		return nil
 	case err := <-errCh:
-		b.Close()
 		if err != nil && !errors.Is(err, net.ErrClosed) && !errors.Is(err, io.EOF) {
 			return err
 		}
+
 		return nil
 	}
 }
 
 func (b *Bridge) controlLoop() error {
 	_, err := io.Copy(io.Discard, b.control)
-	if err != nil && !errors.Is(err, net.ErrClosed) && !errors.Is(err, io.EOF) {
+	if err != nil {
 		return fmt.Errorf("control connection: %w", err)
 	}
 
@@ -145,16 +147,9 @@ func (b *Bridge) netToTapLoop() error {
 			continue
 		}
 
-		written := 0
-		for written < n {
-			count, err := b.tap.Write(buffer[written:n])
-			if err != nil {
-				return fmt.Errorf("write frame to TAP: %w", err)
-			}
-			if count == 0 {
-				return io.ErrShortWrite
-			}
-			written += count
+		err = tap.WriteFrame(b.tap, buffer[:n])
+		if err != nil {
+			return fmt.Errorf("write frame to TAP: %w", err)
 		}
 	}
 }

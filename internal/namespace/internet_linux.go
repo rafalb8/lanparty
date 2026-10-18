@@ -42,10 +42,12 @@ func (n *nsInternet) setup(fd netns.NsHandle, subnet netip.Prefix) error {
 		return fmt.Errorf("create internet veth: %w", err)
 	}
 	n.link = veth
+
 	err = netlink.AddrAdd(veth, internetAddress(host))
 	if err != nil {
 		return fmt.Errorf("address host veth: %w", err)
 	}
+
 	err = netlink.LinkSetUp(veth)
 	if err != nil {
 		return fmt.Errorf("bring host veth up: %w", err)
@@ -56,26 +58,32 @@ func (n *nsInternet) setup(fd netns.NsHandle, subnet netip.Prefix) error {
 		return err
 	}
 	defer handle.Close()
+
 	peer, err := handle.LinkByName("lpwan")
 	if err != nil {
 		return err
 	}
+
 	err = handle.AddrAdd(peer, internetAddress(guest))
 	if err != nil {
 		return err
 	}
+
 	err = handle.LinkSetUp(peer)
 	if err != nil {
 		return err
 	}
+
 	loopback, err := handle.LinkByName("lo")
 	if err != nil {
 		return err
 	}
+
 	err = handle.LinkSetUp(loopback)
 	if err != nil {
 		return err
 	}
+
 	err = handle.RouteAdd(&netlink.Route{LinkIndex: peer.Attrs().Index, Gw: net.IP(host.AsSlice())})
 	if err != nil {
 		return fmt.Errorf("add internet default route: %w", err)
@@ -88,6 +96,7 @@ func (n *nsInternet) setup(fd netns.NsHandle, subnet netip.Prefix) error {
 		Hooknum: nftables.ChainHookPostrouting, Priority: nftables.ChainPriorityNATSource,
 	})
 	connection.AddRule(&nftables.Rule{Table: table, Chain: chain, Exprs: internetNAT(veth.Name, guest)})
+
 	err = connection.Flush()
 	if err != nil {
 		return fmt.Errorf("install internet NAT (requires kernel nftables support): %w", err)
@@ -104,6 +113,7 @@ func internetAddress(address netip.Addr) *netlink.Addr {
 func internetNAT(name string, source netip.Addr) []expr.Any {
 	interfaceName := make([]byte, 16)
 	copy(interfaceName, name)
+
 	return []expr.Any{
 		&expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 1},
 		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: interfaceName},
@@ -117,6 +127,7 @@ func (n *nsInternet) close() {
 	for _, relay := range n.dns {
 		relay.close()
 	}
+
 	if n.table != nil {
 		connection := &nftables.Conn{}
 		connection.DelTable(n.table)
@@ -125,6 +136,7 @@ func (n *nsInternet) close() {
 			slog.Error("remove namespace NAT", "table", n.table.Name, "err", err)
 		}
 	}
+
 	if n.link != nil {
 		err := netlink.LinkDel(n.link)
 		if err != nil {
