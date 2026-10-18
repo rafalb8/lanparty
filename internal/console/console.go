@@ -1,4 +1,4 @@
-package lanparty
+package console
 
 import (
 	"context"
@@ -6,20 +6,10 @@ import (
 	"io"
 	"text/tabwriter"
 
-	"github.com/tailscale/tailcat"
 	"golang.design/x/clipboard"
 )
 
-const (
-	controlPort = 8245
-	dataPort    = 8246
-
-	serverCIDR = "10.82.45.1/24"
-
-	maxBufferSize = tailcat.MaxUDPPayload
-)
-
-func printInfo(wr io.Writer, title string, rows ...string) {
+func PrintInfo(wr io.Writer, title string, rows ...string) {
 	if title != "" {
 		fmt.Fprintln(wr)
 		fmt.Fprintln(wr, title)
@@ -37,12 +27,12 @@ func printInfo(wr io.Writer, title string, rows ...string) {
 	}
 }
 
-func copyToClipboard(token string) error {
+func CopyToClipboard(text string) error {
 	err := clipboard.Init()
 	if err != nil {
 		return err
 	}
 
-	_, err = clipboard.Write(context.Background(), clipboard.FmtText, []byte(token))
+	_, err = clipboard.Write(context.Background(), clipboard.FmtText, []byte(text))
 	return err
 }

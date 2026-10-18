@@ -3,6 +3,7 @@ module github.com/rafalb8/lanparty
 go 1.27.1
 
 require (
+	github.com/google/nftables v0.2.1-0.20240414091927-5e242ec57806
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
 	github.com/spf13/pflag v1.0.10
 	github.com/tailscale/tailcat v0.7.0

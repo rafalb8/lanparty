@@ -1,9 +1,10 @@
-package lanparty
+package namespace
 
 import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"runtime"
 	"time"
@@ -18,47 +19,72 @@ type Namespace struct {
 	fd       netns.NsHandle
 	listener *net.UnixListener
 	done     chan struct{}
+	internet *nsInternet
 }
 
-func NewNamespace() (*Namespace, error) {
-	type result struct {
-		fd  netns.NsHandle
-		err error
+func New(internet bool, subnet netip.Prefix) (*Namespace, error) {
+	fd := netns.None()
+	err := inNamespace(netns.None(), func() error {
+		var err error
+		fd, err = netns.New()
+		return err
+	})
+	if err != nil {
+		fd.Close()
+		return nil, fmt.Errorf("create network namespace (requires CAP_SYS_ADMIN): %w", err)
 	}
 
-	ready := make(chan result, 1)
+	n := &Namespace{fd: fd}
+	if internet {
+		n.internet = &nsInternet{}
+		err = n.internet.setup(n.fd, subnet)
+		if err != nil {
+			n.Close()
+			return nil, fmt.Errorf("namespace internet: %w", err)
+		}
+	}
+	return n, nil
+}
 
+// A None handle runs setup in the current namespace; always restore it afterward.
+func inNamespace(fd netns.NsHandle, setup func() error) error {
+	ready := make(chan error, 1)
 	go func() {
 		runtime.LockOSThread()
-
 		original, err := netns.Get()
 		if err != nil {
 			runtime.UnlockOSThread()
-			ready <- result{err: err}
+			ready <- err
 			return
 		}
 		defer original.Close()
-
-		fd, nErr := netns.New()
-
+		if fd != netns.None() {
+			err = netns.Set(fd)
+			if err != nil {
+				runtime.UnlockOSThread()
+				ready <- err
+				return
+			}
+		}
+		setupErr := setup()
 		err = netns.Set(original)
 		if err != nil {
-			fd.Close()
-			ready <- result{err: fmt.Errorf("restore host namespace: %w", err)}
 			// Returning while locked discards the thread instead of reusing it.
+			ready <- fmt.Errorf("restore host namespace: %w", err)
 			return
 		}
-
 		runtime.UnlockOSThread()
-		ready <- result{fd: fd, err: nErr}
+		ready <- setupErr
 	}()
+	return <-ready
+}
 
-	r := <-ready
-	if r.err != nil {
-		return nil, fmt.Errorf("create network namespace (requires CAP_SYS_ADMIN): %w", r.err)
-	}
+func (n *Namespace) Handle() netns.NsHandle {
+	return n.fd
+}
 
-	return &Namespace{fd: r.fd}, nil
+func (n *Namespace) HasInternet() bool {
+	return n.internet != nil
 }
 
 func namespaceAddress() *net.UnixAddr {
@@ -137,12 +163,15 @@ func (n *Namespace) Close() {
 		<-n.done
 	}
 
+	if n.internet != nil {
+		n.internet.close()
+	}
 	n.fd.Close()
 }
 
-// EnterNamespace changes the calling thread only; callers must lock it until exec.
+// Enter changes the calling thread only; callers must lock it until exec.
 // An absent session leaves the thread in its original network namespace.
-func EnterNamespace() error {
+func Enter() error {
 	conn, err := net.DialUnix("unixpacket", nil, namespaceAddress())
 	if errors.Is(err, unix.ECONNREFUSED) || errors.Is(err, unix.ENOENT) {
 		return nil

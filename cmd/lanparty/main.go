@@ -9,26 +9,28 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/rafalb8/lanparty/internal/lanparty"
+	"github.com/rafalb8/lanparty/internal/bridge"
+	"github.com/rafalb8/lanparty/internal/config"
+	"github.com/rafalb8/lanparty/internal/hub"
+	"github.com/rafalb8/lanparty/internal/launcher"
+	"github.com/rafalb8/lanparty/internal/namespace"
 )
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "exec" {
-		err := execCommand(os.Args[2:])
+		err := launcher.Exec(os.Args[2:])
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
-
 		return
 	}
 
-	cfg, err := parseFlags(os.Args[1:])
+	cfg, err := config.Parse(os.Args[1:])
 	if err != nil {
-		if errors.Is(err, errHelp) {
+		if errors.Is(err, config.ErrHelp) {
 			return
 		}
-
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(2)
 	}
@@ -50,16 +52,16 @@ func main() {
 	}
 }
 
-func run(ctx context.Context, cfg Config, logger *slog.Logger) error {
-	var namespace *lanparty.Namespace
+func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
+	var networkNamespace *namespace.Namespace
 	var err error
 
 	if cfg.Namespace {
-		namespace, err = lanparty.NewNamespace()
+		networkNamespace, err = namespace.New(cfg.Internet, cfg.InternetSubnet)
 		if err != nil {
 			return err
 		}
-		defer namespace.Close()
+		defer networkNamespace.Close()
 	}
 
 	var session interface {
@@ -68,17 +70,22 @@ func run(ctx context.Context, cfg Config, logger *slog.Logger) error {
 	}
 
 	if cfg.ServerMode {
-		session, err = lanparty.NewHub(logger, cfg.CopyToken, namespace)
+		session, err = hub.New(logger, networkNamespace, cfg.Subnet)
 	} else {
-		session, err = lanparty.NewBridge(ctx, cfg.Token, logger, namespace)
+		session, err = bridge.New(ctx, bridge.Config{
+			Token:     cfg.Token,
+			Logger:    logger,
+			Namespace: networkNamespace,
+			Subnet:    cfg.Subnet,
+		})
 	}
 	if err != nil {
 		return err
 	}
 	defer session.Close()
 
-	if namespace != nil {
-		err = namespace.Publish()
+	if networkNamespace != nil {
+		err = networkNamespace.Publish()
 		if err != nil {
 			return err
 		}

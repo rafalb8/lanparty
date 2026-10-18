@@ -1,4 +1,4 @@
-package main
+package launcher
 
 import (
 	"errors"
@@ -7,11 +7,12 @@ import (
 	"os/exec"
 	"runtime"
 
-	"github.com/rafalb8/lanparty/internal/lanparty"
+	"github.com/rafalb8/lanparty/internal/namespace"
 	"golang.org/x/sys/unix"
 )
 
-func execCommand(args []string) error {
+// Exec replaces the process with the command. Callers must exit on failure.
+func Exec(args []string) error {
 	args, err := prepareCommand(args)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -25,8 +26,8 @@ func execCommand(args []string) error {
 
 	runtime.LockOSThread()
 
-	// Do not unlock on failure: main exits, and no other goroutine may reuse this thread.
-	err = lanparty.EnterNamespace()
+	// Do not unlock on failure: no other goroutine may reuse this thread before exit.
+	err = namespace.Enter()
 	if err != nil {
 		return err
 	}

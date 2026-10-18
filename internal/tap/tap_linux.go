@@ -1,9 +1,10 @@
-package lanparty
+package tap
 
 import (
 	"fmt"
 	"net"
 
+	"github.com/rafalb8/lanparty/internal/namespace"
 	"github.com/songgao/water"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
@@ -12,7 +13,7 @@ import (
 
 const tapMTU = 1218
 
-func createTap() (*water.Interface, error) {
+func Create() (*water.Interface, error) {
 	ifce, err := water.New(water.Config{DeviceType: water.TAP, Name: "lp%d"})
 	if err != nil {
 		return nil, fmt.Errorf("tap: create interface: %w", err)
@@ -52,7 +53,7 @@ func createTap() (*water.Interface, error) {
 	return ifce, nil
 }
 
-func configureTap(ifce *water.Interface, cidr string, namespace *Namespace) error {
+func Configure(ifce *water.Interface, cidr string, namespace *namespace.Namespace) error {
 	target := netns.None()
 	if namespace != nil {
 		link, err := netlink.LinkByName(ifce.Name())
@@ -60,12 +61,12 @@ func configureTap(ifce *water.Interface, cidr string, namespace *Namespace) erro
 			return fmt.Errorf("tap: find link %s: %w", ifce.Name(), err)
 		}
 
-		err = netlink.LinkSetNsFd(link, int(namespace.fd))
+		err = netlink.LinkSetNsFd(link, int(namespace.Handle()))
 		if err != nil {
 			return fmt.Errorf("tap: move into namespace: %w", err)
 		}
 
-		target = namespace.fd
+		target = namespace.Handle()
 	}
 
 	handle, err := netlink.NewHandleAt(target)
@@ -103,6 +104,10 @@ func configureTap(ifce *water.Interface, cidr string, namespace *Namespace) erro
 		err = handle.LinkSetUp(loopback)
 		if err != nil {
 			return fmt.Errorf("tap: bring loopback up: %w", err)
+		}
+
+		if namespace.HasInternet() {
+			return nil
 		}
 
 		err = handle.RouteAdd(&netlink.Route{

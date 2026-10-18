@@ -1,4 +1,4 @@
-package lanparty
+package hub
 
 import (
 	"context"
@@ -14,6 +14,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rafalb8/lanparty/internal/config"
+	"github.com/rafalb8/lanparty/internal/console"
+	"github.com/rafalb8/lanparty/internal/namespace"
+	"github.com/rafalb8/lanparty/internal/tap"
 	"github.com/songgao/water"
 	"github.com/tailscale/tailcat"
 )
@@ -23,6 +27,7 @@ type Hub struct {
 	clients map[netip.Addr]*client
 	used    [256]bool
 	closed  bool
+	subnet  netip.Prefix
 
 	tap    *water.Interface
 	srv    *tailcat.Server
@@ -40,16 +45,17 @@ type client struct {
 	data   tailcat.ConnPacketConn
 }
 
-func NewHub(logger *slog.Logger, copyTokenToClipboard bool, namespace *Namespace) (*Hub, error) {
-	tap, err := createTap()
+func New(logger *slog.Logger, namespace *namespace.Namespace, subnet netip.Prefix) (*Hub, error) {
+	iface, err := tap.Create()
 	if err != nil {
 		return nil, err
 	}
 
 	hub := &Hub{
 		clients: make(map[netip.Addr]*client),
-		tap:     tap,
+		tap:     iface,
 		logger:  logger,
+		subnet:  subnet,
 	}
 
 	hub.used[0] = true
@@ -61,13 +67,13 @@ func NewHub(logger *slog.Logger, copyTokenToClipboard bool, namespace *Namespace
 			logger.Debug(fmt.Sprintf("tailcat: "+format, args...))
 		},
 		OnTCP: func(port uint16) func(net.Conn) {
-			if port != controlPort {
+			if port != config.ControlPort {
 				return nil
 			}
 			return hub.handleControl
 		},
 		OnUDP: func(port uint16) func(tailcat.ConnPacketConn) {
-			if port != dataPort {
+			if port != config.DataPort {
 				return nil
 			}
 			return hub.handleData
@@ -75,7 +81,8 @@ func NewHub(logger *slog.Logger, copyTokenToClipboard bool, namespace *Namespace
 		UDPIdleTimeout: 24 * time.Hour,
 	}
 
-	err = configureTap(tap, serverCIDR, namespace)
+	serverCIDR := netip.PrefixFrom(subnet.Addr().Next(), subnet.Bits()).String()
+	err = tap.Configure(iface, serverCIDR, namespace)
 	if err != nil {
 		hub.Close()
 		return nil, fmt.Errorf("configure server TAP: %w", err)
@@ -89,21 +96,20 @@ func NewHub(logger *slog.Logger, copyTokenToClipboard bool, namespace *Namespace
 	}
 
 	token := string(hub.srv.TailcatAddr())
-	printInfo(
+	console.PrintInfo(
 		os.Stdout, "LAN Party Server",
 		"Address:", serverCIDR,
-		"Interface:", tap.Name(),
-		"Control:", fmt.Sprintf("TCP :%d", controlPort),
-		"Data:", fmt.Sprintf("UDP :%d", dataPort),
+		"Interface:", iface.Name(),
+		"Control:", fmt.Sprintf("TCP :%d", config.ControlPort),
+		"Data:", fmt.Sprintf("UDP :%d", config.DataPort),
 		"Token:", token,
 	)
-	if copyTokenToClipboard {
-		err = copyToClipboard(token)
-		if err != nil {
-			logger.Warn("failed to copy server token to clipboard", "err", err)
-		} else {
-			fmt.Fprintln(os.Stdout, "Token copied to clipboard")
-		}
+
+	err = console.CopyToClipboard(token)
+	if err != nil {
+		logger.Warn("failed to copy server token to clipboard", "err", err)
+	} else {
+		fmt.Fprintln(os.Stdout, "Token copied to clipboard")
 	}
 
 	return hub, nil
@@ -155,7 +161,7 @@ func (h *Hub) handleControl(conn net.Conn) {
 	}
 
 	cidr := client.addr.String() + "/24"
-	printInfo(os.Stdout, "", "Player connected", cidr)
+	console.PrintInfo(os.Stdout, "", "Player connected", cidr)
 	h.logger.Debug("player connected", "peer", peer, "address", cidr)
 
 	_, err = io.Copy(io.Discard, conn)
@@ -187,7 +193,7 @@ func (h *Hub) handleData(conn tailcat.ConnPacketConn) {
 	client.setData(conn)
 	defer client.clearData(conn)
 
-	var buffer [maxBufferSize]byte
+	var buffer [tailcat.MaxUDPPayload]byte
 	for {
 		n, err := conn.Read(buffer[:])
 		if err != nil {
@@ -212,7 +218,7 @@ func (h *Hub) handleData(conn tailcat.ConnPacketConn) {
 }
 
 func (h *Hub) tapLoop() error {
-	var buffer [maxBufferSize]byte
+	var buffer [tailcat.MaxUDPPayload]byte
 
 	for {
 		n, err := h.tap.Read(buffer[:])
@@ -246,9 +252,11 @@ func (h *Hub) addClient(peer netip.Addr, control net.Conn) (*client, bool) {
 		}
 
 		h.used[host] = true
+		addr := h.subnet.Addr().As4()
+		addr[3] = host
 		client := &client{
 			peer:    peer,
-			addr:    netip.AddrFrom4([4]byte{10, 82, 45, host}),
+			addr:    netip.AddrFrom4(addr),
 			control: control,
 		}
 		h.clients[peer] = client
@@ -274,7 +282,7 @@ func (h *Hub) removeClient(peer netip.Addr, client *client) {
 	client.close()
 
 	cidr := client.addr.String() + "/24"
-	printInfo(os.Stdout, "", "Player disconnected", cidr)
+	console.PrintInfo(os.Stdout, "", "Player disconnected", cidr)
 	h.logger.Debug("player disconnected", "peer", peer, "address", cidr)
 }
 
