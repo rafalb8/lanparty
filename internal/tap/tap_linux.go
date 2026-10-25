@@ -8,13 +8,53 @@ import (
 	"github.com/rafalb8/lanparty/internal/namespace"
 	"github.com/songgao/water"
 	"github.com/vishvananda/netlink"
-	"github.com/vishvananda/netns"
+	"golang.org/x/sys/unix"
 	"tailscale.com/net/netmon"
 )
 
 const tapMTU = 1218
 
-func Create() (*water.Interface, error) {
+type Interface struct {
+	*water.Interface
+	handle    *netlink.Handle
+	namespace *namespace.Namespace
+}
+
+// New completes namespace transitions while CAP_SYS_ADMIN is still available.
+func New(ns *namespace.Namespace) (*Interface, error) {
+	iface, err := create()
+	if err != nil {
+		return nil, err
+	}
+	p := &Interface{Interface: iface, namespace: ns}
+	if ns != nil {
+		var link netlink.Link
+		link, err = netlink.LinkByName(iface.Name())
+		if err == nil {
+			err = netlink.LinkSetNsFd(link, int(ns.Handle()))
+		}
+		if err == nil {
+			p.handle, err = ns.OpenRouteHandle()
+		}
+	} else {
+		p.handle, err = netlink.NewHandle(unix.NETLINK_ROUTE)
+	}
+	if err != nil {
+		p.Close()
+		return nil, fmt.Errorf("tap: prepare configuration: %w", err)
+	}
+	return p, nil
+}
+
+func (p *Interface) Close() {
+	if p.handle != nil {
+		p.handle.Close()
+		p.handle = nil
+	}
+	p.Interface.Close()
+}
+
+func create() (*water.Interface, error) {
 	ifce, err := water.New(water.Config{DeviceType: water.TAP, Name: "lp%d"})
 	if err != nil {
 		return nil, fmt.Errorf("tap: create interface: %w", err)
@@ -54,27 +94,12 @@ func Create() (*water.Interface, error) {
 	return ifce, nil
 }
 
-func Configure(ifce *water.Interface, cidr string, namespace *namespace.Namespace) error {
-	target := netns.None()
-	if namespace != nil {
-		link, err := netlink.LinkByName(ifce.Name())
-		if err != nil {
-			return fmt.Errorf("tap: find link %s: %w", ifce.Name(), err)
-		}
-
-		err = netlink.LinkSetNsFd(link, int(namespace.Handle()))
-		if err != nil {
-			return fmt.Errorf("tap: move into namespace: %w", err)
-		}
-
-		target = namespace.Handle()
-	}
-
-	handle, err := netlink.NewHandleAt(target)
-	if err != nil {
-		return fmt.Errorf("tap: open netlink handle: %w", err)
-	}
-	defer handle.Close()
+func (p *Interface) Configure(cidr string) error {
+	ifce, handle, namespace := p.Interface, p.handle, p.namespace
+	defer func() {
+		handle.Close()
+		p.handle = nil
+	}()
 
 	link, err := handle.LinkByName(ifce.Name())
 	if err != nil {
@@ -110,7 +135,7 @@ func Configure(ifce *water.Interface, cidr string, namespace *namespace.Namespac
 		return fmt.Errorf("tap: bring loopback up: %w", err)
 	}
 
-	if namespace.HasInternet() {
+	if namespace.InternetEnabled() {
 		return nil
 	}
 
@@ -126,9 +151,9 @@ func Configure(ifce *water.Interface, cidr string, namespace *namespace.Namespac
 	return nil
 }
 
-func WriteFrame(iface *water.Interface, frame []byte) error {
+func (p *Interface) WriteFrame(frame []byte) error {
 	for len(frame) > 0 {
-		written, err := iface.Write(frame)
+		written, err := p.Write(frame)
 		if err != nil {
 			return err
 		}

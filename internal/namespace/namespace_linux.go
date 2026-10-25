@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
 	"golang.org/x/sys/unix"
 )
@@ -89,8 +90,41 @@ func (n *Namespace) Handle() netns.NsHandle {
 	return n.fd
 }
 
-func (n *Namespace) HasInternet() bool {
+func (n *Namespace) InternetEnabled() bool {
 	return n.internet != nil
+}
+
+// OpenRouteHandle opens the setup socket before CAP_SYS_ADMIN is dropped.
+func (n *Namespace) OpenRouteHandle() (*netlink.Handle, error) {
+	return openRouteHandle(n.fd)
+}
+
+func openRouteHandle(fd netns.NsHandle) (*netlink.Handle, error) {
+	var handle *netlink.Handle
+	err := inNamespace(fd, func() error {
+		var err error
+		handle, err = netlink.NewHandle(unix.NETLINK_ROUTE)
+		return err
+	})
+	if err != nil {
+		if handle != nil {
+			handle.Close()
+		}
+		return nil, err
+	}
+	return handle, nil
+}
+
+// StartDNS starts processing only after privileged namespace setup has finished.
+func (n *Namespace) StartDNS() {
+	if n.internet == nil {
+		return
+	}
+	for _, relay := range n.internet.dns {
+		relay.workers.Add(2)
+		go relay.serveUDP()
+		go relay.serveTCP()
+	}
 }
 
 func namespaceAddress() *net.UnixAddr {

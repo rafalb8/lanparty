@@ -87,13 +87,6 @@ func (n *nsInternet) setupDNS(fd netns.NsHandle) error {
 		return fmt.Errorf("configure namespace DNS: %w", err)
 	}
 
-	// Start forwarding only after the setup thread has returned to the host.
-	for _, relay := range n.dns {
-		relay.workers.Add(2)
-		go relay.serveUDP()
-		go relay.serveTCP()
-	}
-
 	return nil
 }
 

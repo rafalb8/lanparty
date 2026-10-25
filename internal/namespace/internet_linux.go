@@ -53,7 +53,7 @@ func (n *nsInternet) setup(fd netns.NsHandle, subnet netip.Prefix) error {
 		return fmt.Errorf("bring host veth up: %w", err)
 	}
 
-	handle, err := netlink.NewHandleAt(fd)
+	handle, err := openRouteHandle(fd)
 	if err != nil {
 		return err
 	}

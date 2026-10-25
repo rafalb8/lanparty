@@ -14,6 +14,9 @@ import (
 	"github.com/rafalb8/lanparty/internal/hub"
 	"github.com/rafalb8/lanparty/internal/launcher"
 	"github.com/rafalb8/lanparty/internal/namespace"
+	"github.com/rafalb8/lanparty/internal/privilege"
+	"github.com/rafalb8/lanparty/internal/tap"
+	"golang.org/x/sys/unix"
 )
 
 func main() {
@@ -52,9 +55,25 @@ func main() {
 	}
 }
 
-func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
+func run(ctx context.Context, cfg config.Config, logger *slog.Logger) (runErr error) {
+	err := privilege.Harden()
+	if err != nil {
+		return err
+	}
+	mask := uint32(1 << unix.CAP_NET_ADMIN)
+	if cfg.Namespace {
+		mask |= 1 << unix.CAP_SYS_ADMIN
+	}
+	err = privilege.Keep(mask)
+	if err != nil {
+		return err
+	}
+	// Registered first so final capability removal follows all resource cleanup.
+	defer func() {
+		runErr = errors.Join(runErr, privilege.Keep(0))
+	}()
+
 	var networkNamespace *namespace.Namespace
-	var err error
 
 	if cfg.Namespace {
 		networkNamespace, err = namespace.New(cfg.Internet, cfg.InternetSubnet)
@@ -63,6 +82,19 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		}
 		defer networkNamespace.Close()
 	}
+	iface, err := tap.New(networkNamespace)
+	if err != nil {
+		return err
+	}
+	defer iface.Close()
+
+	err = privilege.Keep(1 << unix.CAP_NET_ADMIN)
+	if err != nil {
+		return err
+	}
+	if networkNamespace != nil {
+		networkNamespace.StartDNS()
+	}
 
 	var session interface {
 		Run(context.Context) error
@@ -70,13 +102,14 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	}
 
 	if cfg.ServerMode {
-		session, err = hub.New(logger, networkNamespace, cfg.Subnet)
+		session, err = hub.New(logger, iface, cfg.Subnet, cfg.Internet)
 	} else {
 		session, err = bridge.New(ctx, bridge.Config{
-			Token:     cfg.Token,
-			Logger:    logger,
-			Namespace: networkNamespace,
-			Subnet:    cfg.Subnet,
+			Token:    cfg.Token,
+			Logger:   logger,
+			TAP:      iface,
+			Internet: cfg.Internet,
+			Subnet:   cfg.Subnet,
 		})
 	}
 	if err != nil {

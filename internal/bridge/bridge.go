@@ -13,37 +13,31 @@ import (
 
 	"github.com/rafalb8/lanparty/internal/config"
 	"github.com/rafalb8/lanparty/internal/console"
-	"github.com/rafalb8/lanparty/internal/namespace"
+	"github.com/rafalb8/lanparty/internal/privilege"
 	"github.com/rafalb8/lanparty/internal/tap"
-	"github.com/songgao/water"
 	"github.com/tailscale/tailcat"
 )
 
 type Config struct {
-	Token     string
-	Logger    *slog.Logger
-	Namespace *namespace.Namespace
-	Subnet    netip.Prefix
+	Token    string
+	Logger   *slog.Logger
+	TAP      *tap.Interface
+	Internet bool
+	Subnet   netip.Prefix
 }
 
 type Bridge struct {
-	Config
-
+	tap     *tap.Interface
 	cli     *tailcat.Client
 	control net.Conn
 	data    tailcat.ConnPacketConn
-	tap     *water.Interface
 
 	closeOnce sync.Once
 }
 
 func New(ctx context.Context, cfg Config) (result *Bridge, err error) {
-	iface, err := tap.Create()
-	if err != nil {
-		return nil, err
-	}
-
-	bridge := &Bridge{Config: cfg, tap: iface}
+	iface := cfg.TAP
+	bridge := &Bridge{tap: iface}
 	defer func() {
 		if err != nil {
 			bridge.Close()
@@ -51,8 +45,9 @@ func New(ctx context.Context, cfg Config) (result *Bridge, err error) {
 	}()
 
 	cli := tailcat.NewClient(tailcat.Addr(cfg.Token))
+	logger := cfg.Logger
 	cli.Logf = func(format string, args ...any) {
-		cfg.Logger.Debug(fmt.Sprintf("bridge: tailcat: "+format, args...))
+		logger.Debug(fmt.Sprintf("bridge: tailcat: "+format, args...))
 	}
 	bridge.cli = cli
 
@@ -61,10 +56,16 @@ func New(ctx context.Context, cfg Config) (result *Bridge, err error) {
 		return nil, fmt.Errorf("dial control connection: %w", err)
 	}
 	bridge.control = control
+	stop := context.AfterFunc(ctx, func() { control.Close() })
+	defer stop()
 
 	var host [1]byte
 	_, err = io.ReadFull(control, host[:])
 	if err != nil {
+		ctxErr := ctx.Err()
+		if ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, fmt.Errorf("read assigned address: %w", err)
 	}
 
@@ -75,9 +76,15 @@ func New(ctx context.Context, cfg Config) (result *Bridge, err error) {
 	addr := cfg.Subnet.Addr().As4()
 	addr[3] = host[0]
 	cidr := netip.PrefixFrom(netip.AddrFrom4(addr), cfg.Subnet.Bits()).String()
-	err = tap.Configure(iface, cidr, cfg.Namespace)
+	err = iface.Configure(cidr)
 	if err != nil {
 		return nil, fmt.Errorf("configure client TAP: %w", err)
+	}
+	if !cfg.Internet {
+		err = privilege.Keep(0)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	data, err := cli.DialUDPPort(ctx, config.DataPort)
@@ -147,7 +154,7 @@ func (b *Bridge) netToTapLoop() error {
 			continue
 		}
 
-		err = tap.WriteFrame(b.tap, buffer[:n])
+		err = b.tap.WriteFrame(buffer[:n])
 		if err != nil {
 			return fmt.Errorf("write frame to TAP: %w", err)
 		}
@@ -185,10 +192,6 @@ func (b *Bridge) Close() {
 
 		if b.control != nil {
 			b.control.Close()
-		}
-
-		if b.tap != nil {
-			b.tap.Close()
 		}
 
 		if b.cli != nil {

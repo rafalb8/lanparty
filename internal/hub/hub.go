@@ -14,9 +14,8 @@ import (
 
 	"github.com/rafalb8/lanparty/internal/config"
 	"github.com/rafalb8/lanparty/internal/console"
-	"github.com/rafalb8/lanparty/internal/namespace"
+	"github.com/rafalb8/lanparty/internal/privilege"
 	"github.com/rafalb8/lanparty/internal/tap"
-	"github.com/songgao/water"
 	"github.com/tailscale/tailcat"
 )
 
@@ -27,7 +26,7 @@ type Hub struct {
 	closed  bool
 	subnet  netip.Prefix
 
-	tap    *water.Interface
+	tap    *tap.Interface
 	srv    *tailcat.Server
 	logger *slog.Logger
 
@@ -43,12 +42,7 @@ type client struct {
 	data   tailcat.ConnPacketConn
 }
 
-func New(logger *slog.Logger, namespace *namespace.Namespace, subnet netip.Prefix) (*Hub, error) {
-	iface, err := tap.Create()
-	if err != nil {
-		return nil, err
-	}
-
+func New(logger *slog.Logger, iface *tap.Interface, subnet netip.Prefix, internet bool) (*Hub, error) {
 	hub := &Hub{
 		clients: make(map[netip.Addr]*client),
 		tap:     iface,
@@ -76,10 +70,17 @@ func New(logger *slog.Logger, namespace *namespace.Namespace, subnet netip.Prefi
 	}
 
 	serverCIDR := netip.PrefixFrom(subnet.Addr().Next(), subnet.Bits()).String()
-	err = tap.Configure(iface, serverCIDR, namespace)
+	err := iface.Configure(serverCIDR)
 	if err != nil {
 		hub.Close()
 		return nil, fmt.Errorf("configure server TAP: %w", err)
+	}
+	if !internet {
+		err = privilege.Keep(0)
+		if err != nil {
+			hub.Close()
+			return nil, err
+		}
 	}
 
 	err = hub.srv.Start()
@@ -177,6 +178,9 @@ func (h *Hub) handleData(conn tailcat.ConnPacketConn) {
 	peer := udpAddr.AddrPort().Addr()
 	h.mu.RLock()
 	client := h.clients[peer]
+	if client != nil {
+		client.setData(conn)
+	}
 	h.mu.RUnlock()
 	if client == nil {
 		h.logger.Debug("data connection without control connection", "peer", peer)
@@ -184,7 +188,6 @@ func (h *Hub) handleData(conn tailcat.ConnPacketConn) {
 		return
 	}
 
-	client.setData(conn)
 	defer client.clearData(conn)
 
 	var buffer [tailcat.MaxUDPPayload]byte
@@ -201,7 +204,7 @@ func (h *Hub) handleData(conn tailcat.ConnPacketConn) {
 			continue
 		}
 
-		err = tap.WriteFrame(h.tap, buffer[:n])
+		err = h.tap.WriteFrame(buffer[:n])
 		if err != nil {
 			h.logger.Debug("failed to write frame to TAP", "peer", peer, "err", err)
 			return
@@ -313,10 +316,6 @@ func (h *Hub) Close() {
 
 		if h.srv != nil {
 			h.srv.Close()
-		}
-
-		if h.tap != nil {
-			h.tap.Close()
 		}
 	})
 }

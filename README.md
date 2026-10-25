@@ -13,6 +13,8 @@ make
 
 This builds a static binary and uses `sudo` to grant `CAP_NET_ADMIN` and
 `CAP_SYS_ADMIN`. Run `make` after code changes to rebuild and reapply capabilities.
+Keep `CGO_ENABLED=0` when building manually. Session startup uses Go's all-thread
+system calls to drop capabilities and refuses to run if these are unsupported.
 
 ## Usage
 
